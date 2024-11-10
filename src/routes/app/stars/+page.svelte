@@ -33,7 +33,7 @@
     // Move fetch inside onMount
     onMount(async () => {
       try {
-        const response = await fetch('http://localhost:3030/repo.json');
+        const response = await fetch('/api/repo.json');
         if (!response.ok) {
           throw new Error('Network response was not ok');
         }
