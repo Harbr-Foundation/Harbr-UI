@@ -4,16 +4,15 @@ ARG NODE_VERSION=22.11.0
 ################################################################################
 # Use node image for base image for all stages.
 FROM node:${NODE_VERSION}-alpine as base
+
 # Set working directory for all build stages.
 WORKDIR /usr/src/app
 
 ################################################################################
 # Create a stage for installing production dependencies.
 FROM base as deps
+
 # Download dependencies as a separate step to take advantage of Docker's caching.
-# Leverage a cache mount to /root/.npm to speed up subsequent builds.
-# Leverage bind mounts to package.json and package-lock.json to avoid having to copy them
-# into this layer.
 RUN --mount=type=bind,source=package.json,target=package.json \
     --mount=type=bind,source=package-lock.json,target=package-lock.json \
     --mount=type=cache,target=/root/.npm \
@@ -22,43 +21,57 @@ RUN --mount=type=bind,source=package.json,target=package.json \
 ################################################################################
 # Create a stage for building the application.
 FROM base as build
-# Download additional development dependencies before building, as some projects require
-# "devDependencies" to be installed to build. If you don't need this, remove this step.
+
+# Define build argument
+ARG JWT_SECRET
+ENV JWT_SECRET=${JWT_SECRET}
+
+# Download additional development dependencies
 RUN --mount=type=bind,source=package.json,target=package.json \
     --mount=type=bind,source=package-lock.json,target=package-lock.json \
     --mount=type=cache,target=/root/.npm \
     npm ci
+
 # Copy the rest of the source files into the image.
 COPY . .
+
+# Create .env file with the JWT_SECRET
+RUN touch .env && \
+    echo "JWT_SECRET=${JWT_SECRET}" >> .env && \
+    cat .env
+
 # Run the build script.
 RUN npm run build
 
 ################################################################################
-# Create a new stage to run the application with minimal runtime dependencies
+# Final stage
 FROM base as final
+
 # Use production node environment by default.
 ENV NODE_ENV production
 ENV HOST 0.0.0.0
 
-# Create directory and set permissions before copying files
+# Create directory and set permissions
 RUN mkdir -p /usr/src/app && chown -R node:node /usr/src/app
 
-# Copy package.json and package-lock.json first
+# Copy package files
 COPY --chown=node:node package.json package-lock.json ./
 
-# Install dependencies as root first
+# Install production dependencies
 RUN npm i -v
 RUN npm install -v vite
 
-# Copy the built application from the build stage
+# Copy the built application and config
 COPY --chown=node:node --from=build /usr/src/app/ ./
-COPY --chown=node:node --from=build /usr/src/app/vite.config.js ./
 
-# Switch to non-root user after all file operations
+# Ensure .env is copied
+COPY --chown=node:node --from=build /usr/src/app/.env ./.env
+
+# Switch to non-root user
 USER node
 
-# Expose the port that the application listens on.
+# Expose port
 EXPOSE 4173
 
-# Run the application.
+# Run the application
 CMD ["npm", "run", "preview", "--", "--host", "0.0.0.0"]
